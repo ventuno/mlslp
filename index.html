@@ -1,0 +1,35 @@
+<html>
+  <head>
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/2.2.0/jquery.min.js"></script> 
+    <script>
+      function sendMessage() {
+        var textAreaContent = jQuery('#content');
+        var filesContent = jQuery('#files');
+        var formData = new FormData();
+        var content = textAreaContent.val();
+        if (content) {
+          formData.append('content', content);
+          var pictures = filesContent[0].files;
+          for (var i = 0; i < pictures.length; i++) {
+            formData.append('pictures', pictures[i]);
+          }
+          
+          jQuery.ajax({
+            url:'/api/message',
+            type: 'POST',
+            contentType: false,
+            processData: false,
+            data: formData
+          });
+          textAreaContent.val('');
+        }
+      }
+    </script>
+  </head>
+
+  <body>
+    <textarea id="content"></textarea>
+    <input id="files" type="file" multiple accept="image/*">
+    <button onclick="sendMessage();">Send</button>
+  </body>
+</html>
