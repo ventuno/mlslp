@@ -155,10 +155,14 @@ function MIMEMultipartFromObject (obj) {
     var attachment = obj.attachments[i];
     var mimeType = attachment.mimetype.split('/');
     if (mimeType[0] === 'image') {
-      var encoding = 'binary';
-      var attachmentData = fs.readFileSync(attachment.path, {encoding: encoding});
-      var image = new MIMEImage(attachmentData, attachment.originalname, encoding, mimeType[1]);
-      multipart.attach(image);
+      try {
+        var encoding = 'binary';
+        var attachmentData = fs.readFileSync(attachment.path, {encoding: encoding});
+        var image = new MIMEImage(attachmentData, attachment.originalname, encoding, mimeType[1]);
+        multipart.attach(image);
+      } catch (e) {
+        console.error('Issue loding file (if the dyno restarted, you lost it!)', e);
+      }
     }
   }
   return multipart;

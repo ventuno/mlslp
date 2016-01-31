@@ -3,40 +3,51 @@ var session = require('express-session');
 var bodyParser = require('body-parser');
 var multer  = require('multer');
 var mongoose = require('mongoose');
+var http = require("http");
 
 var util = require('util');
 var google = require('googleapis');
 var CronJob = require('cron').CronJob;
 var Q = require('q');
 
+var WSS = require('./wsindex');
 var MIME  = require('./MIME');
 var CaffeineClient = require('./CaffeineClient');
 var promise_ize = require('./promise_ize').promise_ize;
 var model = require('./model');
 var Message = model.Message;
 var Auth = model.Auth;
+var subscription = require('./GPubSubMessageClient').subscription;
+var MessageClientListener = require('./GPubSubMessageClientListener');
+var GApiWrapper = require('./GApiWrapper');
+var mlslpUtils = require('./mlslpUtils');
+var decorateEmailAddress = mlslpUtils.decorateEmailAddress;
+var getJSONError = mlslpUtils.getJSONError;
 
-var CLIENT_ID = process.env.CLIENT_ID;
 var CLIENT_SECRET = process.env.CLIENT_SECRET;
-var REDIRECT_URL = process.env.REDIRECT_URL;
+
+var GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
+var GCLOUD_SUBSCRIPTION_NAME = process.env.GCLOUD_SUBSCRIPTION_NAME;
+
+var DEFAULT_RECIPIENT = process.env.DEFAULT_RECIPIENT;
 var QUIET_PERIOD_START = process.env.QUIET_PERIOD_START;
 var QUIET_PERIOD_END = process.env.QUIET_PERIOD_END;
-var DEFAULT_RECIPIENT = process.env.DEFAULT_RECIPIENT;
-var GCLOUD_PROJECT_ID = process.env.GCLOUD_PROJECT_ID;
 var CAFFEINE_CLIENT = process.env.CAFFEINE_CLIENT;
 
-var OAuth2 = google.auth.OAuth2;
-var oauth2Client = new OAuth2(CLIENT_ID, CLIENT_SECRET, REDIRECT_URL);
-var gmail = google.gmail('v1');
 var upload = multer({ dest: 'uploads/' });
 var caffeineClient = new CaffeineClient(CAFFEINE_CLIENT);
+var sessionStore = new session.MemoryStore();
+var expressSession = session({secret: CLIENT_SECRET, store: sessionStore});
+var app = express();
+var server = http.createServer(app);
+var wssConnection = WSS(server, sessionStore);
 
 mongoose.connect(process.env.MONGOLAB_URI, function (error) {
   if (error) console.error(error);
   else console.log('mongo connected');
 });
 
-new CronJob(util.format('0', '26', QUIET_PERIOD_END, '*', '*', '*'), function() {
+new CronJob(util.format('0', '44', QUIET_PERIOD_END, '*', '*', '*'), function() {
   console.log('End of quiet period, sending messages now', new Date());
   Message.aggregate([{$group: {_id: {to: '$to', from: '$from'}, messages: {$push: '$$ROOT'}}}])
     .exec()
@@ -45,9 +56,10 @@ new CronJob(util.format('0', '26', QUIET_PERIOD_END, '*', '*', '*'), function() 
         var to = data[i]._id.to;
         var from = data[i]._id.from;
         var messages = data[i].messages;
-        promise_ize(Auth.findOne, [{id: from}], Auth).promise.then(function (auth) {
+        //need to search based on the undecorated version of the email
+        promise_ize(Auth.findOne, [{id: from.replace(/(\+\S*)@/, '@')}], Auth).promise.then(function (auth) {
           var tokens = auth.get('tokens');
-          oauth2Client.setCredentials(tokens);
+          GApiWrapper.setCredentials(tokens);
           var emailPromises = [];
           for (var j = 0; j < messages.length; j++) {
             emailPromises.push(sendEmail(messages[j]));
@@ -72,49 +84,42 @@ new CronJob(util.format('0', '26', QUIET_PERIOD_END, '*', '*', '*'), function() 
 }, null, true, 'UTC');
 
 function sendEmail (message) {
-  var threadId = message.threadId
+  var threadId = message.threadId;
   var email = MIME.MIMEMultipartFromObject(message).asBase64url();
-  var options = {
-    auth: oauth2Client,
-    userId: 'me',
-    resource: {
-      raw: email,
-      threadId: threadId
-    }
-  };
-  return promise_ize(gmail.users.messages.send, [options]).promise;
+  return GApiWrapper.sendMessage(email, threadId).promise;
 }
 
-function getJSONError (msg) {
-  return {error: msg};
-}
-
-express()
+app
   .use(bodyParser.json())
   .use(bodyParser.urlencoded({ extended: true }))
-  .use(session({
-    secret: CLIENT_SECRET
-  }))
+  .use(expressSession)
   .get('/auth', function (req, res) {
-    var url = oauth2Client.generateAuthUrl({
+    var url = GApiWrapper.generateAuthUrl({
       access_type: 'offline',
-      scope: ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.readonly']
+      scope: ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/gmail.modify']
     });
     return res.redirect(url);
   })
   .get('/oauth2callback', function (req, res) {
     var code = req.query.code;
-    promise_ize(oauth2Client.getToken, [code], oauth2Client).promise
+    //get oauth2 token
+    GApiWrapper.getToken(code).promise
       .then(function (tokens) {
-        oauth2Client.setCredentials(tokens);
-        var options = {auth: oauth2Client, userId: 'me'};
+        GApiWrapper.setCredentials(tokens);
         req.session.googleaccesstoken = tokens;
-        return promise_ize(gmail.users.getProfile, [options]).promise;
+        MessageClientListener.startListening(subscription, wssConnection);
+        return GApiWrapper.watch(util.format('projects/%s/topics/%s',GCLOUD_PROJECT_ID, GCLOUD_SUBSCRIPTION_NAME)).promise;
       })
+      //get user profile information
+      .then(function () {
+        return GApiWrapper.getProfile().promise;
+      })
+      //find auth info
       .then(function (profile) {
         req.session.emailAddress = profile.emailAddress;
         return promise_ize(Auth.findOne, [{id: profile.emailAddress}], Auth).promise;
       })
+      //create or update auth info
       .then(function (auth) {
         var emailAddress = req.session.emailAddress;
         var newTokens = req.session.googleaccesstoken;
@@ -131,6 +136,7 @@ express()
         }
         return promise_ize(auth.save, [], auth).promise;
       })
+      //finally render the index
       .then(function () {
         return res.redirect('/index.html');
       })
@@ -148,7 +154,7 @@ express()
       return res.status(401).json(getJSONError('need auth'));
     }
     var threadId = req.session.threadId || null;
-    oauth2Client.setCredentials(tokens);
+    GApiWrapper.setCredentials(tokens);
     var subject = req.body.subject || 'no subject';
     var content = req.body.content;
     var to = req.body.to || DEFAULT_RECIPIENT;
@@ -159,9 +165,9 @@ express()
         content: content,
         subject: subject,
         to: to,
-        from: from,
+        from: decorateEmailAddress(from),
         attachments: req.files,
-        threadId: threadId
+        threadId: threadId,
       };
       var now = new Date();
       if (now.getUTCHours() >= QUIET_PERIOD_START && now.getUTCHours() <= QUIET_PERIOD_END) {
@@ -200,4 +206,5 @@ express()
     }
   })
   .use(express.static(__dirname + '/'))
-  .listen(process.env.PORT || 5100);
+
+server.listen(process.env.PORT || 5100)

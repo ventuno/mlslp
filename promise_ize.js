@@ -23,8 +23,8 @@ function promise_izeStandardCallback (args, deferred) {
 
 function promise_ize (func, args, handler) {
   args.push(promise_izeCallback);
-  var ret = func.apply(handler, args);
   var deferred = new Q.defer();
+  var ret = func.apply(handler, args);
   function promise_izeCallback () {
     var args = arguments;
     if (ret instanceof http.ClientRequest) {
