@@ -47,7 +47,7 @@ mongoose.connect(process.env.MONGOLAB_URI, function (error) {
   else console.log('mongo connected');
 });
 
-new CronJob(util.format('0', '44', QUIET_PERIOD_END, '*', '*', '*'), function() {
+new CronJob(util.format('0', '13', QUIET_PERIOD_END, '*', '*', '*'), function() {
   console.log('End of quiet period, sending messages now', new Date());
   Message.aggregate([{$group: {_id: {to: '$to', from: '$from'}, messages: {$push: '$$ROOT'}}}])
     .exec()
