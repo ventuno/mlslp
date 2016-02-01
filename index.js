@@ -4,6 +4,7 @@ var bodyParser = require('body-parser');
 var multer  = require('multer');
 var mongoose = require('mongoose');
 var http = require("http");
+var fs = require("fs");
 
 var util = require('util');
 var google = require('googleapis');
@@ -159,6 +160,13 @@ app
     var content = req.body.content;
     var to = req.body.to || DEFAULT_RECIPIENT;
     var from = req.session.emailAddress;
+    var files = req.files || [];
+    if (files.length > 0) {
+      for (var i = 0; i < files.length; i++) {
+        var file = files[i];
+        file.data = fs.readFileSync(file.path, {encoding: 'binary'});
+      }
+    }
     if (content) {
       var messageObject = {
         date: Date.now(),
@@ -166,7 +174,7 @@ app
         subject: subject,
         to: to,
         from: decorateEmailAddress(from),
-        attachments: req.files,
+        attachments: files,
         threadId: threadId,
       };
       var now = new Date();
