@@ -14,7 +14,8 @@ var Message = mongoose.model('Message', MessageSchema);
 
 var AuthSchema = new mongoose.Schema({
   id : String,
-  tokens: Object
+  tokens: Object,
+  threadId: String
 });
 var Auth = mongoose.model('Auth', AuthSchema);
 

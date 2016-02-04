@@ -134,6 +134,7 @@ app
             auth.set('tokens.refresh_token', newTokens.refresh_token);
           }
           auth.set('tokens.access_token', newTokens.access_token);
+          req.session.threadId = auth.get('threadId');
         }
         return promise_ize(auth.save, [], auth).promise;
       })
@@ -197,8 +198,16 @@ app
               req.session.threadId = msgInfo.threadId;
             }
             console.log('Email successfully delivered');
+            return promise_ize(Auth.findOne, [{id: req.session.emailAddress}], Auth).promise;
+          })
+          .then(function (auth) {
+            auth.set('threadId', req.session.threadId)
+            return promise_ize(auth.save, [], auth).promise;
+          }).
+          then(function () {
             return res.status(201).json({message: 'sent'});
-          }, function (err) {
+          })
+          .catch(function (err) {
             return res.status(400).json(getJSONError(err));
           });
       }

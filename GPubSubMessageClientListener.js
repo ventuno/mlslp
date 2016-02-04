@@ -4,7 +4,7 @@ var GApiWrapper = require('./GApiWrapper');
 var mlslpUtils = require('./mlslpUtils');
 
 function onError(err) {
- console.log(err); 
+ console.log(err);
 }
 
 function onMessage(message) {
@@ -44,10 +44,16 @@ function onMessage(message) {
             }
           }
           if (message.payload.mimeType.indexOf('multipart/' > -1)) {
-            var convertedMessage = new Buffer(message.payload.parts[0].body.data, 'base64').toString('utf8').match(/^([\S\s]*)\r\n\r\nOn[\s\S]*<[\s\S]*>/) || [];
-            if (convertedMessage.length > 1) {
-              strippedMessage.text = convertedMessage[1];
-            } else {
+            var regExps = [/^([\S\s]*)\r\n\r\nOn[\s\S]*<[\s\S]*>/, /^([\S\s]*)\r\n\r\n\d{4}-\d{2}-\d{2}\s{1}\d{2}:\d{2}\s{1}\S{3}\+\d{2}:\d{2}\s{1}<[\s\S]*>:/];
+            var convertedMessage = new Buffer(message.payload.parts[0].body.data, 'base64').toString('utf8');
+            for (var k = 0; k < regExps.length; k++) {
+              var testedMessage = convertedMessage.match(regExps[k]);
+              if (testedMessage.length > 1) {
+                strippedMessage.text = testedMessage[1];
+                break;
+              }
+            }
+            if (!strippedMessage.text) {
               strippedMessage.text = message.snippet;
             }
           } else {
